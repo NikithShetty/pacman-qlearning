@@ -50,6 +50,10 @@ class GameStateFeatures:
         self.pacmanPos = state.getPacmanPosition()
         self.ghostPositions = tuple(state.getGhostPositions())
         self.foodPositions = tuple(state.getFood().asList())
+        legal = state.getLegalPacmanActions()
+        if Directions.STOP in legal:
+            legal.remove(Directions.STOP)
+        self.legalActions = tuple(legal)
 
     def __hash__(self):
         return hash((self.pacmanPos, self.ghostPositions, self.foodPositions))
@@ -66,9 +70,9 @@ class QLearnAgent(Agent):
 
     def __init__(self,
                  alpha: float = 0.2,
-                 epsilon: float = 0.05,
-                 gamma: float = 0.8,
-                 maxAttempts: int = 30,
+                 epsilon: float = 0.1,
+                 gamma: float = 0.9,
+                 maxAttempts: int = 5,
                  numTraining: int = 10):
         """
         These values are either passed from the command line (using -a alpha=0.5,...)
@@ -94,6 +98,9 @@ class QLearnAgent(Agent):
         self.episodesSoFar = 0
         self.qValues = util.Counter()
         self.actionCounts = util.Counter()
+        self.lastState = None
+        self.lastAction = None
+        self.lastGameState = None
 
     # Accessor functions for the variable episodesSoFar controlling learning
     def incrementEpisodesSoFar(self):
@@ -166,10 +173,9 @@ class QLearnAgent(Agent):
         Returns:
             q_value: the maximum estimated Q-value attainable from the state
         """
-        legal = [Directions.NORTH, Directions.SOUTH, Directions.EAST, Directions.WEST]
-        if not legal:
+        if not state.legalActions:
             return 0.0
-        return max(self.getQValue(state, action) for action in legal)
+        return max(self.getQValue(state, a) for a in state.legalActions)
 
     # WARNING: You will be tested on the functionality of this method
     # DO NOT change the function signature
@@ -264,34 +270,42 @@ class QLearnAgent(Agent):
         if Directions.STOP in legal:
             legal.remove(Directions.STOP)
 
-        # logging to help you understand the inputs, feel free to remove
-        print("Legal moves: ", legal)
-        print("Pacman position: ", state.getPacmanPosition())
-        print("Ghost positions:", state.getGhostPositions())
-        print("Food locations: ")
-        print(state.getFood())
-        print("Score: ", state.getScore())
-
         stateFeatures = GameStateFeatures(state)
         if len(legal) == 0:
             return Directions.STOP
 
-        # Epsilon-greedy action selection.
+        # Learn from the previous real transition: the current state is the
+        # actual successor of whatever action was taken last step (including
+        # ghost movement), so this captures the true dynamics.
+        if self.lastState is not None and self.lastAction is not None:
+            reward = self.computeReward(self.lastGameState, state)
+            self.learn(self.lastState, self.lastAction, reward, stateFeatures)
+            self.updateCount(self.lastState, self.lastAction)
+
+        # Epsilon-greedy action selection.  During training the exploration
+        # function biases the agent toward under-tried actions; during test
+        # time (alpha == 0) we pick the action with the best Q-value,
+        # breaking ties at random so the agent does not get stuck.
         if util.flipCoin(self.epsilon):
             action = random.choice(legal)
         else:
-            actionValues = util.Counter()
-            for candidate in legal:
-                qValue = self.getQValue(stateFeatures, candidate)
-                count = self.getCount(stateFeatures, candidate)
-                actionValues[candidate] = self.explorationFn(qValue, count)
-            action = actionValues.argMax()
+            if self.getAlpha() > 0:
+                actionValues = util.Counter()
+                for candidate in legal:
+                    qValue = self.getQValue(stateFeatures, candidate)
+                    count = self.getCount(stateFeatures, candidate)
+                    actionValues[candidate] = self.explorationFn(qValue, count)
+                action = actionValues.argMax()
+            else:
+                qValues = [(self.getQValue(stateFeatures, a), a) for a in legal]
+                maxQ = max(q for q, _ in qValues)
+                bestActions = [a for q, a in qValues if q == maxQ]
+                action = random.choice(bestActions)
 
-        nextState = state.generatePacmanSuccessor(action)
-        reward = self.computeReward(state, nextState)
-        nextStateFeatures = GameStateFeatures(nextState)
-        self.learn(stateFeatures, action, reward, nextStateFeatures)
-        self.updateCount(stateFeatures, action)
+        # Store current state and action for next-step learning.
+        self.lastState = stateFeatures
+        self.lastAction = action
+        self.lastGameState = state
 
         return action
 
@@ -304,6 +318,19 @@ class QLearnAgent(Agent):
             state: the final game state
         """
         print(f"Game {self.getEpisodesSoFar()} just ended!")
+
+        # Perform the final Q-learning update for the terminal transition.
+        # getAction() is not called once the episode ends, so the last
+        # transition (leading to win/loss) must be learned here.
+        if self.lastState is not None and self.lastAction is not None:
+            reward = self.computeReward(self.lastGameState, state)
+            terminalFeatures = GameStateFeatures(state)
+            self.learn(self.lastState, self.lastAction, reward, terminalFeatures)
+            self.updateCount(self.lastState, self.lastAction)
+
+        self.lastState = None
+        self.lastAction = None
+        self.lastGameState = None
 
         # Keep track of the number of games played, and set learning
         # parameters to zero when we are done with the pre-set number
