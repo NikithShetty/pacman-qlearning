@@ -70,8 +70,11 @@ class QLearnAgent(Agent):
 
     def __init__(self,
                  alpha: float = 0.2,
+                 # Explore 10% of the time.
                  epsilon: float = 0.1,
+                 # Give higher weight to future rewards.
                  gamma: float = 0.9,
+                 # Trust utility after 5 attempts.
                  maxAttempts: int = 5,
                  numTraining: int = 10):
         """
@@ -274,27 +277,22 @@ class QLearnAgent(Agent):
         if len(legal) == 0:
             return Directions.STOP
 
-        # Learn from the previous real transition: the current state is the
-        # actual successor of whatever action was taken last step (including
-        # ghost movement), so this captures the true dynamics.
+        # Learn from the previous real transition.
         if self.lastState is not None and self.lastAction is not None:
             reward = self.computeReward(self.lastGameState, state)
             self.learn(self.lastState, self.lastAction, reward, stateFeatures)
             self.updateCount(self.lastState, self.lastAction)
 
-        # Epsilon-greedy action selection.  During training the exploration
-        # function biases the agent toward under-tried actions; during test
-        # time (alpha == 0) we pick the action with the best Q-value,
-        # breaking ties at random so the agent does not get stuck.
+        # Epsilon-greedy action selection.
         if util.flipCoin(self.epsilon):
             action = random.choice(legal)
         else:
             if self.getAlpha() > 0:
                 actionValues = util.Counter()
-                for candidate in legal:
-                    qValue = self.getQValue(stateFeatures, candidate)
-                    count = self.getCount(stateFeatures, candidate)
-                    actionValues[candidate] = self.explorationFn(qValue, count)
+                for action in legal:
+                    qValue = self.getQValue(stateFeatures, action)
+                    count = self.getCount(stateFeatures, action)
+                    actionValues[action] = self.explorationFn(qValue, count)
                 action = actionValues.argMax()
             else:
                 qValues = [(self.getQValue(stateFeatures, a), a) for a in legal]
